@@ -2,7 +2,13 @@
   "photon fury": {
     "name": "Photon Fury",
     "summary": "A vigilante of light and justice...",
-    "powers": "Laser vision, stealth hacking",
+    "powers": "Laser vision, Super strength, stealth hacking",
     "image": "https://example.com/photon.png"
+  },
+  "the chameleon": {
+    "name": "The Chameleon",
+    "summary": "A shapeshifting guardian of the blockchain.",
+    "powers": "Stealth, Morphing, Power Sight, temperature control, Regen, chain encryption",
+    "image": "https://imgur.com/a/6hu8rZD"
   }
 }
