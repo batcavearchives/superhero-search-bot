@@ -44,6 +44,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "🦸 Welcome to the Superhero Bot! 🦹\n\n"
         "Commands:\n"
         "/search <name> - Search for existing superheroes\n"
+        "/hero <name> - Alias for /search\n"
         "/addhero Name|Description|Image_URL - Add a custom superhero\n"
         "/listcustom - List your added custom heroes"
     )
@@ -51,7 +52,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /search command to query the Superhero API with refined matching."""
+    """Handle /search (or /hero) command to query the Superhero API with refined matching."""
     if not context.args:
         await update.message.reply_text("Usage: /search <hero name>")
         return
@@ -146,6 +147,7 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("search", search))
+    app.add_handler(CommandHandler("hero", search))  # alias for /search
     app.add_handler(CommandHandler("addhero", addhero))
     app.add_handler(CommandHandler("listcustom", listcustom))
 
