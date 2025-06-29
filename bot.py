@@ -1,127 +1,156 @@
 import os
 import json
+import logging
 import requests
-import openai
-from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import urllib.parse
+
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# Load environment variables
-load_dotenv()
-BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-API_TOKEN = os.getenv("SUPERHERO_API_TOKEN")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-API_BASE = f"https://superheroapi.com/api/{API_TOKEN}"
-openai.api_key = OPENAI_KEY
+# Replace with your actual tokens or set as environment variables
+SUPERHERO_API_TOKEN = os.getenv("SUPERHERO_API_TOKEN", "YOUR_SUPERHERO_API_TOKEN")
+SUPERHERO_API_URL = f"https://superheroapi.com/api/{SUPERHERO_API_TOKEN}"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 
-HERO_DB_FILE = "heroes.json"
+# File to store custom heroes
+CUSTOM_DB_FILE = "custom_heroes.json"
 
-def load_custom_heroes():
-    if not os.path.exists(HERO_DB_FILE):
-        return {}
-    with open(HERO_DB_FILE, "r") as f:
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+
+def load_custom_heroes() -> list:
+    """Load custom heroes from JSON file."""
+    if not os.path.exists(CUSTOM_DB_FILE):
+        with open(CUSTOM_DB_FILE, "w") as f:
+            json.dump([], f)
+    with open(CUSTOM_DB_FILE, "r") as f:
         return json.load(f)
 
-def save_hero(hero_obj):
-    db = load_custom_heroes()
-    key = hero_obj["name"].lower()
-    db[key] = hero_obj
-    with open(HERO_DB_FILE, "w") as f:
-        json.dump(db, f, indent=2)
 
-def search_custom(name):
-    db = load_custom_heroes()
-    return db.get(name.lower())
+def save_custom_heroes(heroes: list):
+    """Save custom heroes to JSON file."""
+    with open(CUSTOM_DB_FILE, "w") as f:
+        json.dump(heroes, f, indent=2)
 
-def search_api(name):
-    res = requests.get(f"{API_BASE}/search/{name}")
-    if res.status_code == 200:
-        data = res.json()
-        if data["response"] == "success":
-            return data["results"][0]
-    return None
 
-async def generate_openai_lore(name):
-    prompt = f"Create a superhero profile for {name}. Include powers, backstory, and uniqueness."
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=250
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /start command."""
+    msg = (
+        "🦸 Welcome to the Superhero Bot! 🦹\n\n"
+        "Commands:\n"
+        "/search <name> - Search for existing superheroes\n"
+        "/addhero Name|Description|Image_URL - Add a custom superhero\n"
+        "/listcustom - List your added custom heroes"
     )
-    return response.choices[0].message.content.strip()
+    await update.message.reply_text(msg)
 
-def format_api_hero(hero):
-    bio = hero["biography"]
-    power = hero["powerstats"]
-    appearance = hero["appearance"]
-    return f"""🦸 *{hero['name']}*
 
-🏷️ *Full Name:* {bio.get("full-name", "Unknown")}
-🧬 *Alignment:* {bio.get("alignment", "Unknown")}
-🌍 *First Appearance:* {bio.get("first-appearance", "Unknown")}
-
-💥 *Power Stats:*
-- Intelligence: {power.get("intelligence")}
-- Strength: {power.get("strength")}
-- Speed: {power.get("speed")}
-- Power: {power.get("power")}
-- Combat: {power.get("combat")}
-
-🎭 *Appearance:*
-- Gender: {appearance.get("gender")}
-- Height: {appearance.get("height")[0]}
-- Race: {appearance.get("race")}
-"""
-
-async def hero_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /search command to query the Superhero API with refined matching."""
     if not context.args:
-        await update.message.reply_text("Use `/hero Batman` to search.", parse_mode="Markdown")
+        await update.message.reply_text("Usage: /search <hero name>")
         return
 
-    name = " ".join(context.args).strip()
-    print(f"Received command: {update.message.text}")
-    await update.message.reply_text("🔍 Processing your hero search…")
-
-    custom = search_custom(name)
-    if custom:
-        keyboard = [[InlineKeyboardButton("📸 Image", url=custom["image"])] if "image" in custom else []]
-        keyboard.append([InlineKeyboardButton("🔍 Google", url=f"https://www.google.com/search?q={name}+superhero")])
-        msg = f"🦸 *{custom['name']}*\n\n{custom['summary']}\n\n🌟 Powers: `{custom.get('powers', 'Unknown')}`"
-        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-
-    hero = search_api(name)
-    if hero:
-        msg = format_api_hero(hero)
-        keyboard = [
-            [InlineKeyboardButton("📸 Image", url=hero["image"]["url"])],
-            [InlineKeyboardButton("🔍 Google", url=f"https://www.google.com/search?q={name}+superhero")]
-        ]
-        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-
-    msg = await generate_openai_lore(name)
-    await update.message.reply_text(f"🦸 *{name}*\n\n{msg}", parse_mode="Markdown")
-
-async def add_hero(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if str(user_id) != "6876497893":
-        await update.message.reply_text("❌ You are not authorized to use this command.")
-        return
+    query = " ".join(context.args)
+    # URL-encode to handle spaces and special characters
+    encoded = urllib.parse.quote_plus(query)
     try:
-        data = json.loads(" ".join(context.args))
-        if "name" not in data or "summary" not in data:
-            raise ValueError
-        save_hero(data)
-        await update.message.reply_text(f"✅ Hero '{data['name']}' added.")
-    except:
-        await update.message.reply_text("❌ Failed to parse hero. Send as JSON with at least 'name' and 'summary'.")
+        resp = requests.get(f"{SUPERHERO_API_URL}/search/{encoded}")
+        data = resp.json()
+    except Exception as e:
+        logger.error(f"API request failed: {e}")
+        await update.message.reply_text("Sorry, I couldn't reach the Superhero API.")
+        return
 
-# 🔁 Start the bot using polling (not webhook)
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("hero", hero_handler))
-    app.add_handler(CommandHandler("addhero", add_hero))
-    print("🤖 Bot is running...")
+    if data.get('response') != 'success' or 'results' not in data:
+        await update.message.reply_text("Hero not found.")
+        return
+
+    results = data.get('results', [])
+    # Prioritize any exact-name match
+    exact = [h for h in results if h.get('name','').lower() == query.lower()]
+    to_show = exact or results[:3]
+
+    for hero in to_show:
+        bio = hero.get('biography', {})
+        stats = hero.get('powerstats', {})
+        app_ = hero.get('appearance', {})
+        caption = (
+            f"*{hero.get('name','Unknown')}*\n"
+            f"🏷️ Full Name: {bio.get('full-name','N/A')}\n"
+            f"⚖️ Alignment: {bio.get('alignment','N/A')}\n"
+            f"🌍 First Appearance: {bio.get('first-appearance','N/A')}\n\n"
+            f"*Power Stats:*\n"
+            f"- Intelligence: {stats.get('intelligence','N/A')}\n"
+            f"- Strength: {stats.get('strength','N/A')}\n"
+            f"- Speed: {stats.get('speed','N/A')}\n"
+            f"- Durability: {stats.get('durability','N/A')}\n"
+            f"- Power: {stats.get('power','N/A')}\n"
+            f"- Combat: {stats.get('combat','N/A')}\n\n"
+            f"*Appearance:*\n"
+            f"- Gender: {app_.get('gender','N/A')}\n"
+            f"- Race: {app_.get('race','N/A')}\n"
+            f"- Height: {', '.join(app_.get('height',[])) or 'N/A'}\n"
+            f"- Weight: {', '.join(app_.get('weight',[])) or 'N/A'}"
+        )
+        await update.message.reply_photo(
+            photo=hero.get('image', {}).get('url'),
+            caption=caption,
+            parse_mode="Markdown"
+        )
+
+
+async def addhero(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /addhero command to add a custom hero."""
+    text = update.message.text[len('/addhero'):].strip()
+    parts = [p.strip() for p in text.split('|')]
+    if len(parts) != 3:
+        await update.message.reply_text("Usage: /addhero Name|Description|Image_URL")
+        return
+    name, desc, img = parts
+
+    heroes = load_custom_heroes()
+    heroes.append({
+        'name': name,
+        'description': desc,
+        'image': img
+    })
+    save_custom_heroes(heroes)
+    await update.message.reply_text(f"Custom hero '{name}' added!")
+
+
+async def listcustom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /listcustom command to display custom heroes."""
+    heroes = load_custom_heroes()
+    if not heroes:
+        await update.message.reply_text("No custom heroes added yet.")
+        return
+
+    for hero in heroes:
+        caption = f"*{hero['name']}*\n{hero['description']}"
+        await update.message.reply_photo(
+            photo=hero['image'],
+            caption=caption,
+            parse_mode="Markdown"
+        )
+
+
+def main() -> None:
+    """Start the Telegram bot."""
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("search", search))
+    app.add_handler(CommandHandler("addhero", addhero))
+    app.add_handler(CommandHandler("listcustom", listcustom))
+
     app.run_polling()
 
+
+if __name__ == '__main__':
+    main()
