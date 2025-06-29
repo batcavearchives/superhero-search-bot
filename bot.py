@@ -1,18 +1,80 @@
 import os
+import sys
+import json
+import logging
 import requests
 import urllib.parse
+
 from telegram import Update
-from telegram.ext import ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+
+# Configure logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# --- Load & validate tokens ---
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_BOT_TOKEN:
+    logger.error("❌ TELEGRAM_BOT_TOKEN is not set in the environment!")
+    sys.exit("Missing TELEGRAM_BOT_TOKEN")
 
 COMICVINE_API_KEY = os.getenv("COMICVINE_API_KEY")
-COMICVINE_BASE     = "https://comicvine.gamespot.com/api"
-OLD_API_BASE       = f"https://superheroapi.com/api/{SUPERHERO_API_TOKEN}"
+if not COMICVINE_API_KEY:
+    logger.error("❌ COMICVINE_API_KEY is not set in the environment!")
+    sys.exit("Missing COMICVINE_API_KEY")
+
+SUPERHERO_API_TOKEN = os.getenv("SUPERHERO_API_TOKEN")
+if not SUPERHERO_API_TOKEN:
+    logger.error("❌ SUPERHERO_API_TOKEN is not set in the environment!")
+    sys.exit("Missing SUPERHERO_API_TOKEN")
+
+# API endpoints
+COMICVINE_BASE = "https://comicvine.gamespot.com/api"
+OLD_API_BASE   = f"https://superheroapi.com/api/{SUPERHERO_API_TOKEN}"
+
+# File to store custom heroes
+CUSTOM_DB_FILE = "custom_heroes.json"
+
+
+def load_custom_heroes() -> list:
+    """Load custom heroes from JSON file."""
+    if not os.path.exists(CUSTOM_DB_FILE):
+        with open(CUSTOM_DB_FILE, "w") as f:
+            json.dump([], f)
+    with open(CUSTOM_DB_FILE, "r") as f:
+        return json.load(f)
+
+
+def save_custom_heroes(heroes: list):
+    """Save custom heroes to JSON file."""
+    with open(CUSTOM_DB_FILE, "w") as f:
+        json.dump(heroes, f, indent=2)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /start command."""
+    msg = (
+        "🦸 Welcome to the Superhero Bot! 🦹\n\n"
+        "Commands:\n"
+        "/search <name> - Search for existing superheroes\n"
+        "/hero <name>  - Alias for /search\n"
+        "/addhero Name|Description|Image_URL - Add a custom superhero\n"
+        "/listcustom - List your added custom heroes"
+    )
+    await update.message.reply_text(msg)
+
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /search (or /hero) command with Comic Vine primary and fallback."""
     if not context.args:
-        return await update.message.reply_text("Usage: /search <hero name>")
+        await update.message.reply_text("Usage: /search <hero name>")
+        return
 
     query = " ".join(context.args)
+
     # 1) Try Comic Vine
     params = {
         "api_key": COMICVINE_API_KEY,
@@ -20,47 +82,115 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "filter":  f"name:{query}",
         "field_list": "name,aliases,gender,deck,image,site_detail_url"
     }
-    cv_resp = requests.get(f"{COMICVINE_BASE}/characters/", params=params).json()
-    cv_results = cv_resp.get("results") or []
+    try:
+        cv_resp = requests.get(f"{COMICVINE_BASE}/characters/", params=params).json()
+        cv_results = cv_resp.get("results") or []
+    except Exception as e:
+        logger.warning(f"Comic Vine API request failed: {e}")
+        cv_results = []
 
     if cv_results:
         hero = cv_results[0]
         caption = (
             f"*{hero['name']}*\n"
             f"🔗 More: {hero['site_detail_url']}\n"
-            f"📝 Aliases: {', '.join(hero.get('aliases',[])) or 'None'}\n"
-            f"👤 Gender: {hero.get('gender','Unknown')}\n\n"
-            f"{hero.get('deck','No description available')}"
+            f"📝 Aliases: {', '.join(hero.get('aliases', [])) or 'None'}\n"
+            f"👤 Gender: {hero.get('gender', 'Unknown')}\n\n"
+            f"{hero.get('deck', 'No description available')}"
         )
         return await update.message.reply_photo(
-            photo=hero["image"]["original_url"], caption=caption, parse_mode="Markdown"
+            photo=hero["image"]["original_url"],
+            caption=caption,
+            parse_mode="Markdown"
         )
 
-    # 2) Fallback to old SuperheroAPI
+    # 2) Fallback to SuperheroAPI
     encoded = urllib.parse.quote_plus(query)
-    data = requests.get(f"{OLD_API_BASE}/search/{encoded}").json()
-    if data.get("response") != "success":
+    try:
+        data = requests.get(f"{OLD_API_BASE}/search/{encoded}").json()
+    except Exception as e:
+        logger.error(f"SuperheroAPI request failed: {e}")
+        return await update.message.reply_text("Sorry, both APIs are unreachable.")
+
+    if data.get("response") != "success" or "results" not in data:
         return await update.message.reply_text("Hero not found.")
 
     results = data["results"]
-    exact = [h for h in results if h["name"].lower() == query.lower()]
+    exact = [h for h in results if h.get("name", "").lower() == query.lower()]
     to_show = exact or results[:3]
 
     for hero in to_show:
-        bio   = hero["biography"]
-        stats = hero["powerstats"]
-        app_  = hero["appearance"]
+        bio   = hero.get("biography", {})
+        stats = hero.get("powerstats", {})
+        app_  = hero.get("appearance", {})
         caption = (
-            f"*{hero['name']}*\n"
+            f"*{hero.get('name','Unknown')}*\n"
             f"🏷️ Full Name: {bio.get('full-name','N/A')}\n"
             f"⚖️ Alignment: {bio.get('alignment','N/A')}\n"
             f"🌍 First Appearance: {bio.get('first-appearance','N/A')}\n\n"
             f"*Power Stats:*\n"
-            + "\n".join(f"- {k.capitalize()}: {v}" for k,v in stats.items()) +
-            "\n\n*Appearance:*\n"
-            + "\n".join(f"- {k.capitalize()}: {', '.join(app_.get(k,[])) or 'N/A'}"
-                        for k in ("height","weight"))
+            f"- Intelligence: {stats.get('intelligence','N/A')}\n"
+            f"- Strength:     {stats.get('strength','N/A')}\n"
+            f"- Speed:        {stats.get('speed','N/A')}\n"
+            f"- Durability:   {stats.get('durability','N/A')}\n"
+            f"- Power:        {stats.get('power','N/A')}\n"
+            f"- Combat:       {stats.get('combat','N/A')}\n\n"
+            f"*Appearance:*\n"
+            f"- Gender: {app_.get('gender','N/A')}\n"
+            f"- Race:   {app_.get('race','N/A')}\n"
+            f"- Height: {', '.join(app_.get('height', [])) or 'N/A'}\n"
+            f"- Weight: {', '.join(app_.get('weight', [])) or 'N/A'}"
         )
         await update.message.reply_photo(
-            photo=hero["image"]["url"], caption=caption, parse_mode="Markdown"
+            photo=hero.get("image", {}).get("url"),
+            caption=caption,
+            parse_mode="Markdown"
         )
+
+
+async def addhero(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /addhero command to add a custom hero."""
+    text = update.message.text[len("/addhero"):].strip()
+    parts = [p.strip() for p in text.split("|")]
+    if len(parts) != 3:
+        await update.message.reply_text("Usage: /addhero Name|Description|Image_URL")
+        return
+    name, desc, img = parts
+
+    heroes = load_custom_heroes()
+    heroes.append({"name": name, "description": desc, "image": img})
+    save_custom_heroes(heroes)
+    await update.message.reply_text(f"Custom hero '{name}' added!")
+
+
+async def listcustom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /listcustom command to display custom heroes."""
+    heroes = load_custom_heroes()
+    if not heroes:
+        await update.message.reply_text("No custom heroes added yet.")
+        return
+
+    for hero in heroes:
+        caption = f"*{hero['name']}*\n{hero['description']}"
+        await update.message.reply_photo(
+            photo=hero["image"],
+            caption=caption,
+            parse_mode="Markdown"
+        )
+
+
+def main() -> None:
+    """Start the Telegram bot."""
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start",   start))
+    app.add_handler(CommandHandler("search",  search))
+    app.add_handler(CommandHandler("hero",    search))   # alias for /search
+    app.add_handler(CommandHandler("addhero", addhero))
+    app.add_handler(CommandHandler("listcustom", listcustom))
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
