@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import logging
 import requests
@@ -7,20 +8,28 @@ import urllib.parse
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# Replace with your actual tokens or set as environment variables
-SUPERHERO_API_TOKEN = os.getenv("SUPERHERO_API_TOKEN", "YOUR_SUPERHERO_API_TOKEN")
-SUPERHERO_API_URL = f"https://superheroapi.com/api/{SUPERHERO_API_TOKEN}"
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
-
-# File to store custom heroes
-CUSTOM_DB_FILE = "custom_heroes.json"
-
 # Configure logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Load and validate tokens (fail fast if missing)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_BOT_TOKEN:
+    logger.error("❌ TELEGRAM_BOT_TOKEN is not set in the environment!")
+    sys.exit("Missing TELEGRAM_BOT_TOKEN")
+
+SUPERHERO_API_TOKEN = os.getenv("SUPERHERO_API_TOKEN")
+if not SUPERHERO_API_TOKEN:
+    logger.error("❌ SUPERHERO_API_TOKEN is not set in the environment!")
+    sys.exit("Missing SUPERHERO_API_TOKEN")
+
+SUPERHERO_API_URL = f"https://superheroapi.com/api/{SUPERHERO_API_TOKEN}"
+
+# File to store custom heroes
+CUSTOM_DB_FILE = "custom_heroes.json"
 
 
 def load_custom_heroes() -> list:
@@ -44,7 +53,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "🦸 Welcome to the Superhero Bot! 🦹\n\n"
         "Commands:\n"
         "/search <name> - Search for existing superheroes\n"
-        "/hero <name> - Alias for /search\n"
+        "/hero <name>  - Alias for /search\n"
         "/addhero Name|Description|Image_URL - Add a custom superhero\n"
         "/listcustom - List your added custom heroes"
     )
@@ -52,13 +61,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /search (or /hero) command to query the Superhero API with refined matching."""
+    """Handle /search (or /hero) command with URL-encoding and exact-match."""
     if not context.args:
         await update.message.reply_text("Usage: /search <hero name>")
         return
 
     query = " ".join(context.args)
-    # URL-encode to handle spaces and special characters
     encoded = urllib.parse.quote_plus(query)
     try:
         resp = requests.get(f"{SUPERHERO_API_URL}/search/{encoded}")
@@ -68,19 +76,19 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Sorry, I couldn't reach the Superhero API.")
         return
 
-    if data.get('response') != 'success' or 'results' not in data:
+    if data.get("response") != "success" or "results" not in data:
         await update.message.reply_text("Hero not found.")
         return
 
-    results = data.get('results', [])
-    # Prioritize any exact-name match
-    exact = [h for h in results if h.get('name','').lower() == query.lower()]
+    results = data.get("results", [])
+    # Prioritize exact name match
+    exact = [h for h in results if h.get("name", "").lower() == query.lower()]
     to_show = exact or results[:3]
 
     for hero in to_show:
-        bio = hero.get('biography', {})
-        stats = hero.get('powerstats', {})
-        app_ = hero.get('appearance', {})
+        bio = hero.get("biography", {})
+        stats = hero.get("powerstats", {})
+        app_ = hero.get("appearance", {})
         caption = (
             f"*{hero.get('name','Unknown')}*\n"
             f"🏷️ Full Name: {bio.get('full-name','N/A')}\n"
@@ -96,11 +104,11 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"*Appearance:*\n"
             f"- Gender: {app_.get('gender','N/A')}\n"
             f"- Race: {app_.get('race','N/A')}\n"
-            f"- Height: {', '.join(app_.get('height',[])) or 'N/A'}\n"
-            f"- Weight: {', '.join(app_.get('weight',[])) or 'N/A'}"
+            f"- Height: {', '.join(app_.get('height', [])) or 'N/A'}\n"
+            f"- Weight: {', '.join(app_.get('weight', [])) or 'N/A'}"
         )
         await update.message.reply_photo(
-            photo=hero.get('image', {}).get('url'),
+            photo=hero.get("image", {}).get("url"),
             caption=caption,
             parse_mode="Markdown"
         )
@@ -108,19 +116,15 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def addhero(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /addhero command to add a custom hero."""
-    text = update.message.text[len('/addhero'):].strip()
-    parts = [p.strip() for p in text.split('|')]
+    text = update.message.text[len("/addhero"):].strip()
+    parts = [p.strip() for p in text.split("|")]
     if len(parts) != 3:
         await update.message.reply_text("Usage: /addhero Name|Description|Image_URL")
         return
     name, desc, img = parts
 
     heroes = load_custom_heroes()
-    heroes.append({
-        'name': name,
-        'description': desc,
-        'image': img
-    })
+    heroes.append({"name": name, "description": desc, "image": img})
     save_custom_heroes(heroes)
     await update.message.reply_text(f"Custom hero '{name}' added!")
 
@@ -135,7 +139,7 @@ async def listcustom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     for hero in heroes:
         caption = f"*{hero['name']}*\n{hero['description']}"
         await update.message.reply_photo(
-            photo=hero['image'],
+            photo=hero["image"],
             caption=caption,
             parse_mode="Markdown"
         )
@@ -150,17 +154,9 @@ def main() -> None:
     app.add_handler(CommandHandler("hero", search))  # alias for /search
     app.add_handler(CommandHandler("addhero", addhero))
     app.add_handler(CommandHandler("listcustom", listcustom))
-    from telegram.ext import MessageHandler, filters
 
-    async def debug_all(update, context):
-        logger.info(f"DEBUG got message: {update.message.text!r}")
-        await update.message.reply_text("🛠️ I saw you!")
-
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, debug_all)
-    )
     app.run_polling()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
