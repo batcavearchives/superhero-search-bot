@@ -64,9 +64,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/hero <name>   - Alias for /search\n"
         "/anime <title> - Search for anime titles\n"
         "/addhero Name|Description|Image_URL - Add a custom superhero\n"
-        "/listcustom - List your added custom heroes"
+        "/searchcustom <name> - Search your custom heroes\n"
+        "/listcustom            - List all your added custom heroes"
     )
     await update.message.reply_text(msg)
+
+async def searchcustom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /searchcustom to find a custom hero by name."""
+    if not context.args:
+        await update.message.reply_text("Usage: /searchcustom <hero name>")
+        return
+
+    query = " ".join(context.args).lower()
+    heroes = load_custom_heroes()
+    matches = [h for h in heroes if query in h["name"].lower()]
+
+    if not matches:
+        return await update.message.reply_text(f"No custom heroes found matching “{query}.”")
+
+    for hero in matches:
+        caption = f"*{hero['name']}*\n{hero['description']}"
+        await update.message.reply_photo(
+            photo=hero["image"],
+            caption=caption,
+            parse_mode="Markdown"
+        )
 
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -229,6 +251,8 @@ def main() -> None:
     app.add_handler(CommandHandler("anime", anime))
     app.add_handler(CommandHandler("addhero", addhero))
     app.add_handler(CommandHandler("listcustom", listcustom))
+    app.add_handler(CommandHandler("searchcustom", searchcustom))
+
 
     app.run_polling()
 
