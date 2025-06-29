@@ -34,6 +34,7 @@ if not SUPERHERO_API_TOKEN:
 # API endpoints
 COMICVINE_BASE = "https://comicvine.gamespot.com/api"
 OLD_API_BASE   = f"https://superheroapi.com/api/{SUPERHERO_API_TOKEN}"
+JIKAN_ANIME_ENDPOINT = "https://api.jikan.moe/v4/anime"
 
 # File to store custom heroes
 CUSTOM_DB_FILE = "custom_heroes.json"
@@ -57,10 +58,11 @@ def save_custom_heroes(heroes: list):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command."""
     msg = (
-        "🦸 Welcome to the Superhero Bot! 🦹\n\n"
+        "🦸 Welcome to the Superhero & Anime Bot! 🦹\n\n"
         "Commands:\n"
-        "/search <name> - Search for existing superheroes\n"
-        "/hero <name>  - Alias for /search\n"
+        "/search <name> - Search for superheroes\n"
+        "/hero <name>   - Alias for /search\n"
+        "/anime <title> - Search for anime titles\n"
         "/addhero Name|Description|Image_URL - Add a custom superhero\n"
         "/listcustom - List your added custom heroes"
     )
@@ -75,7 +77,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     query = " ".join(context.args)
 
-    # 1) Try Comic Vine
+    # Comic Vine lookup
     params = {
         "api_key": COMICVINE_API_KEY,
         "format":  "json",
@@ -99,12 +101,12 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"{hero.get('deck', 'No description available')}"
         )
         return await update.message.reply_photo(
-            photo=hero["image"]["original_url"],
+            photo=hero['image']['original_url'],
             caption=caption,
             parse_mode="Markdown"
         )
 
-    # 2) Fallback to SuperheroAPI
+    # SuperheroAPI fallback
     encoded = urllib.parse.quote_plus(query)
     try:
         data = requests.get(f"{OLD_API_BASE}/search/{encoded}").json()
@@ -115,7 +117,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if data.get("response") != "success" or "results" not in data:
         return await update.message.reply_text("Hero not found.")
 
-    results = data["results"]
+    results = data.get("results", [])
     exact = [h for h in results if h.get("name", "").lower() == query.lower()]
     to_show = exact or results[:3]
 
@@ -142,7 +144,45 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"- Weight: {', '.join(app_.get('weight', [])) or 'N/A'}"
         )
         await update.message.reply_photo(
-            photo=hero.get("image", {}).get("url"),
+            photo=hero.get('image', {}).get('url'),
+            caption=caption,
+            parse_mode="Markdown"
+        )
+
+
+async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /anime command to search anime titles using Jikan API."""
+    if not context.args:
+        await update.message.reply_text("Usage: /anime <anime title>")
+        return
+
+    query = " ".join(context.args)
+    params = {
+        "q": query,
+        "limit": 3
+    }
+    try:
+        resp = requests.get(JIKAN_ANIME_ENDPOINT, params=params).json()
+        anime_list = resp.get('data', [])
+    except Exception as e:
+        logger.error(f"Jikan API request failed: {e}")
+        return await update.message.reply_text("Sorry, could not reach the Anime API.")
+
+    if not anime_list:
+        return await update.message.reply_text("No anime found with that title.")
+
+    for anime in anime_list:
+        title = anime.get('title')
+        url   = anime.get('url')
+        synopsis = anime.get('synopsis', 'No synopsis available.')
+        image_url = anime.get('images', {}).get('jpg', {}).get('image_url')
+        caption = (
+            f"*{title}*\n"
+            f"🔗 More: {url}\n\n"
+            f"{synopsis[:500]}{'...' if len(synopsis)>500 else ''}"
+        )
+        await update.message.reply_photo(
+            photo=image_url,
             caption=caption,
             parse_mode="Markdown"
         )
@@ -183,9 +223,10 @@ def main() -> None:
     """Start the Telegram bot."""
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start",   start))
-    app.add_handler(CommandHandler("search",  search))
-    app.add_handler(CommandHandler("hero",    search))   # alias for /search
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("search", search))
+    app.add_handler(CommandHandler("hero", search))   # alias for /search
+    app.add_handler(CommandHandler("anime", anime))
     app.add_handler(CommandHandler("addhero", addhero))
     app.add_handler(CommandHandler("listcustom", listcustom))
 
