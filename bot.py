@@ -150,7 +150,15 @@ def main() -> None:
     app.add_handler(CommandHandler("hero", search))  # alias for /search
     app.add_handler(CommandHandler("addhero", addhero))
     app.add_handler(CommandHandler("listcustom", listcustom))
+    from telegram.ext import MessageHandler, filters
 
+    async def debug_all(update, context):
+        logger.info(f"DEBUG got message: {update.message.text!r}")
+        await update.message.reply_text("🛠️ I saw you!")
+
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, debug_all)
+    )
     app.run_polling()
 
 
